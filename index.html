@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Spacebox // Unified Communications</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="hull">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">◈</span>
+          <div><strong>SPACEBOX</strong><small>UNIFIED COMMUNICATIONS</small></div>
+        </div>
+        <div class="flight-status"><span class="pulse"></span> HULL ONLINE <span class="divider">/</span> 04:26:18 UTC</div>
+        <button class="icon-button" aria-label="Settings">⚙</button>
+      </header>
+
+      <section class="dashboard">
+        <aside class="rail">
+          <div class="rail-title">SIGNALS</div>
+          <button class="nav-item active" data-filter="all"><span>◎</span> All messages <b>12</b></button>
+          <button class="nav-item" data-filter="gmail"><span>✉</span> Gmail <b>4</b></button>
+          <button class="nav-item" data-filter="whatsapp"><span>◌</span> WhatsApp <b>3</b></button>
+          <button class="nav-item" data-filter="linkedin"><span>in</span> LinkedIn <b>2</b></button>
+          <button class="nav-item" data-filter="discord"><span>◈</span> Discord <b>3</b></button>
+          <div class="rail-divider"></div>
+          <div class="rail-title">FLIGHT DECK</div>
+          <button class="nav-item"><span>⌕</span> Search</button>
+          <button class="nav-item"><span>☆</span> Starred</button>
+          <button class="nav-item"><span>⌁</span> Archive</button>
+          <div class="rail-footer"><span class="pulse"></span> SYNC NOMINAL<br><small>Last scan 12 seconds ago</small></div>
+        </aside>
+
+        <section class="inbox-panel">
+          <div class="panel-heading">
+            <div><small>DEEP SPACE RELAY</small><h1>Incoming signals</h1></div>
+            <button class="compose">＋ Compose</button>
+          </div>
+          <div class="searchbar"><span>⌕</span><input id="search" placeholder="Search across all channels..." type="search"><kbd>/</kbd></div>
+          <div id="messages" class="messages"></div>
+        </section>
+
+        <section class="conversation">
+          <div class="conversation-head">
+            <div><small id="conversation-source">GMAIL · 12 MIN AGO</small><h2 id="conversation-title">Mission debrief — tomorrow</h2></div>
+            <button class="icon-button" aria-label="More actions">•••</button>
+          </div>
+          <div id="conversation-body" class="conversation-body"></div>
+          <form id="reply-form" class="reply-box">
+            <textarea id="reply" placeholder="Transmit a reply..."></textarea>
+            <div><span>⌘ Enter to transmit</span><button type="submit">Transmit ↗</button></div>
+          </form>
+        </section>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -60,3 +60,29 @@ launch it with:
 The Omarchy shortcut is **Super+Ctrl+B**. Inside the TUI, use `j`/`k` to
 navigate, `Enter` to open a conversation, `h` to return, `Tab` or `a` to
 switch Gmail accounts, `n`/`p` for pages, `r` to refresh, and `q` to quit.
+
+### Ubuntu
+
+The Go backend and terminal client are distribution-independent and run on
+Ubuntu 22.04 or newer. Install Go and a terminal, then from the repository
+root run:
+
+```bash
+sudo apt update
+sudo apt install golang git
+go build -o ~/.local/bin/spacebox-tui ./cmd/spacebox-tui
+~/.local/bin/spacebox-tui
+```
+
+Start the backend separately with the OAuth environment loaded:
+
+```bash
+set -a
+source .env
+set +a
+go run ./cmd/spacebox
+```
+
+The Omarchy plugin and **Super+Ctrl+B** shortcut are optional and only apply
+to Omarchy. On Ubuntu, launch the TUI directly or create a desktop shortcut
+for `~/.local/bin/spacebox-tui-launch`.

@@ -9,6 +9,10 @@ let messages = [
 const list = document.querySelector("#messages");
 const search = document.querySelector("#search");
 let activeFilter = "all";
+let selectedId = null;
+let nextPageToken = "";
+let pageNumber = 1;
+const pageTokens = [""];
 
 function escapeHTML(value) {
   return String(value ?? "").replace(/[<>&"]/g, char => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[char]));
@@ -30,26 +34,39 @@ function render() {
   list.innerHTML = visible.map((m, i) => `<article class="message ${i === 0 ? "selected" : ""}" data-id="${escapeHTML(m.id)}">
     <div class="avatar">${escapeHTML(m.icon)}</div><div><span class="source">${escapeHTML(m.source.toUpperCase())}</span><h3>${escapeHTML(m.sender)} · ${escapeHTML(m.subject)}</h3><p>${escapeHTML(m.preview)}</p></div><time>${escapeHTML(m.time)}</time>
   </article>`).join("");
-  list.querySelectorAll(".message").forEach(el => el.addEventListener("click", () => select(Number(el.dataset.id))));
-  if (visible[0]) select(visible[0].id);
+  list.querySelectorAll(".message").forEach(el => el.addEventListener("click", () => select(el.dataset.id)));
+  if (visible[0] && selectedId === null) select(visible[0].id);
 }
 
-function select(id) {
+async function select(id) {
   const message = messages.find(m => m.id === id);
   if (!message) return;
+  selectedId = id;
   document.querySelector("#conversation-source").textContent = `${message.source.toUpperCase()} · ${message.time} AGO`;
   document.querySelector("#conversation-title").textContent = message.subject;
-  document.querySelector("#conversation-body").innerHTML = message.body.map((text, i) =>
-    `<div class="bubble ${i ? "outbound" : "inbound"}"><div class="meta">${i ? "YOU" : message.sender} // ${i ? "JUST NOW" : message.time.toUpperCase() + " AGO"}</div><p>${text}</p></div>`).join("");
-  document.querySelectorAll(".message").forEach(el => el.classList.toggle("selected", Number(el.dataset.id) === id));
+  document.querySelector("#conversation-body").innerHTML = `<div class="bubble inbound"><div class="meta">${escapeHTML(message.sender)} // LOADING THREAD</div><p>${escapeHTML(message.preview)}</p></div>`;
+  document.querySelectorAll(".message").forEach(el => el.classList.toggle("selected", el.dataset.id === id));
+  try {
+    const response = await fetch(`/api/threads/${encodeURIComponent(id)}`);
+    if (!response.ok) return;
+    const detail = await response.json();
+    document.querySelector("#conversation-body").innerHTML = (detail.messages || []).map(item =>
+      `<div class="bubble inbound"><div class="meta">${escapeHTML(item.from || message.sender)} // ${escapeHTML(item.date || "")}</div><p>${escapeHTML(item.body || "(No text content)")}</p></div>`).join("");
+  } catch {
+    // Keep the thread preview visible when detail loading is unavailable.
+  }
 }
 
 async function loadLiveMessages() {
   try {
     const response = await fetch("/api/threads");
     if (!response.ok) return;
-    const liveThreads = await response.json();
+    const payload = await response.json();
+    const liveThreads = Array.isArray(payload) ? payload : payload.threads;
     if (!Array.isArray(liveThreads) || liveThreads.length === 0) return;
+    nextPageToken = payload.nextPageToken || "";
+    document.querySelector('[data-count="all"]').textContent = payload.total ?? liveThreads.length;
+    document.querySelector('[data-count="gmail"]').textContent = payload.unread ?? liveThreads.length;
     messages = liveThreads.map(thread => ({
       id: thread.id,
       source: "gmail",
@@ -64,6 +81,26 @@ async function loadLiveMessages() {
   } catch {
     // Keep the prototype messages visible when the API is unavailable.
   }
+
+  async function loadPage(pageToken = "") {
+    selectedId = null;
+    const response = await fetch(`/api/threads?${pageToken ? `pageToken=${encodeURIComponent(pageToken)}` : ""}`);
+    if (!response.ok) return;
+    const payload = await response.json();
+    const liveThreads = payload.threads || [];
+    messages = liveThreads.map(thread => ({
+      id: thread.id, source: "gmail", icon: "✉", sender: thread.from || "Gmail relay",
+      subject: thread.subject || "(No subject)", preview: thread.snippet || "No preview available",
+      time: relativeDate(thread.date), body: [thread.snippet || "Open this thread to view the full message."]
+    }));
+    nextPageToken = payload.nextPageToken || "";
+    document.querySelector('[data-count="all"]').textContent = payload.total ?? "—";
+    document.querySelector('[data-count="gmail"]').textContent = payload.unread ?? "—";
+    document.querySelector("#page-status").textContent = `RELAY ${String(pageNumber).padStart(2, "0")}`;
+    document.querySelector("#previous-page").disabled = pageNumber === 1;
+    document.querySelector("#next-page").disabled = !nextPageToken;
+    render();
+  }
 }
 
 document.querySelectorAll(".nav-item[data-filter]").forEach(button => button.addEventListener("click", () => {
@@ -73,6 +110,17 @@ document.querySelectorAll(".nav-item[data-filter]").forEach(button => button.add
   render();
 }));
 search.addEventListener("input", render);
+document.querySelector("#next-page").addEventListener("click", () => {
+  if (!nextPageToken) return;
+  pageTokens[pageNumber] = nextPageToken;
+  pageNumber += 1;
+  loadPage(nextPageToken);
+});
+document.querySelector("#previous-page").addEventListener("click", () => {
+  if (pageNumber <= 1) return;
+  pageNumber -= 1;
+  loadPage(pageTokens[pageNumber - 2]);
+});
 document.querySelector("#reply-form").addEventListener("submit", event => {
   event.preventDefault();
   const reply = document.querySelector("#reply");
@@ -84,4 +132,4 @@ document.querySelector("#reply-form").addEventListener("submit", event => {
   reply.value = "";
 });
 render();
-loadLiveMessages();
+loadPage().catch(() => loadLiveMessages());

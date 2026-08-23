@@ -45,6 +45,27 @@ type thread struct {
 	Unread  bool   `json:"unread"`
 }
 
+type threadPage struct {
+	Threads       []thread `json:"threads"`
+	NextPageToken string   `json:"nextPageToken,omitempty"`
+	Total         int64    `json:"total"`
+	Unread        int64    `json:"unread"`
+}
+
+type messageDetail struct {
+	ID   string `json:"id"`
+	From string `json:"from"`
+	To   string `json:"to"`
+	Date string `json:"date"`
+	Body string `json:"body"`
+}
+
+type conversation struct {
+	ID       string          `json:"id"`
+	Subject  string          `json:"subject"`
+	Messages []messageDetail `json:"messages"`
+}
+
 func main() {
 	port := env("SPACEBOX_PORT", "8787")
 	dbPath := env("SPACEBOX_DB", filepath.Join(dataDir(), "spacebox.db"))
@@ -140,7 +161,11 @@ func (s *server) listThreads(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	result, err := service.Users.Threads.List("me").MaxResults(50).Do()
+	call := service.Users.Threads.List("me").MaxResults(20)
+	if pageToken := r.URL.Query().Get("pageToken"); pageToken != "" {
+		call = call.PageToken(pageToken)
+	}
+	result, err := call.Do()
 	if err != nil {
 		writeError(w, err)
 		return
@@ -154,7 +179,15 @@ func (s *server) listThreads(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, t)
 	}
-	writeJSON(w, http.StatusOK, out)
+	label, err := service.Users.Labels.Get("me", "INBOX").Do()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, threadPage{
+		Threads: out, NextPageToken: result.NextPageToken,
+		Total: label.ThreadsTotal, Unread: label.ThreadsUnread,
+	})
 }
 
 func (s *server) getThread(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +201,7 @@ func (s *server) getThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, item)
+	writeJSON(w, http.StatusOK, conversationFromGmail(item))
 }
 
 func (s *server) reply(w http.ResponseWriter, r *http.Request) {
@@ -235,10 +268,12 @@ func threadFromGmail(ctx context.Context, service *gmail.Service, id string) (th
 	if err != nil {
 		return thread{}, err
 	}
+
 	t := thread{ID: item.Id, Snippet: html.UnescapeString(item.Snippet)}
 	if len(item.Messages) == 0 {
 		return t, nil
 	}
+
 	last := item.Messages[len(item.Messages)-1]
 	for _, h := range last.Payload.Headers {
 		switch strings.ToLower(h.Name) {
@@ -257,6 +292,47 @@ func threadFromGmail(ctx context.Context, service *gmail.Service, id string) (th
 		}
 	}
 	return t, nil
+}
+
+func conversationFromGmail(item *gmail.Thread) conversation {
+	out := conversation{ID: item.Id, Messages: make([]messageDetail, 0, len(item.Messages))}
+	for _, message := range item.Messages {
+		detail := messageDetail{ID: message.Id, Body: messageBody(message.Payload)}
+		for _, header := range message.Payload.Headers {
+			switch strings.ToLower(header.Name) {
+			case "subject":
+				if out.Subject == "" {
+					out.Subject = header.Value
+				}
+			case "from":
+				detail.From = header.Value
+			case "to":
+				detail.To = header.Value
+			case "date":
+				detail.Date = header.Value
+			}
+		}
+		out.Messages = append(out.Messages, detail)
+	}
+	return out
+}
+
+func messageBody(part *gmail.MessagePart) string {
+	if part == nil {
+		return ""
+	}
+	if part.MimeType == "text/plain" && part.Body != nil && part.Body.Data != "" {
+		data, err := base64.RawURLEncoding.DecodeString(part.Body.Data)
+		if err == nil {
+			return string(data)
+		}
+	}
+	for _, nested := range part.Parts {
+		if body := messageBody(nested); body != "" {
+			return body
+		}
+	}
+	return ""
 }
 
 func (s *server) validState(state string) bool {

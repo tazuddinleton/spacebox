@@ -20,8 +20,8 @@
       <section class="dashboard">
         <aside class="rail">
           <div class="rail-title">SIGNALS</div>
-          <button class="nav-item active" data-filter="all"><span>◎</span> All messages <b>12</b></button>
-          <button class="nav-item" data-filter="gmail"><span>✉</span> Gmail <b>4</b></button>
+          <button class="nav-item active" data-filter="all"><span>◎</span> All messages <b data-count="all">—</b></button>
+          <button class="nav-item" data-filter="gmail"><span>✉</span> Gmail <b data-count="gmail">—</b></button>
           <button class="nav-item" data-filter="whatsapp"><span>◌</span> WhatsApp <b>3</b></button>
           <button class="nav-item" data-filter="linkedin"><span>in</span> LinkedIn <b>2</b></button>
           <button class="nav-item" data-filter="discord"><span>◈</span> Discord <b>3</b></button>
@@ -40,6 +40,7 @@
           </div>
           <div class="searchbar"><span>⌕</span><input id="search" placeholder="Search across all channels..." type="search"><kbd>/</kbd></div>
           <div id="messages" class="messages"></div>
+          <div class="pager"><button id="previous-page" disabled>← PREV DECK</button><span id="page-status">RELAY 01</span><button id="next-page" disabled>NEXT DECK →</button></div>
         </section>
 
         <section class="conversation">

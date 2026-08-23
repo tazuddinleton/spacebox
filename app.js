@@ -18,6 +18,83 @@ function escapeHTML(value) {
   return String(value ?? "").replace(/[<>&"]/g, char => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[char]));
 }
 
+function renderInlineMarkdown(value) {
+  let html = escapeHTML(value);
+  html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  html = html.replace(/\*\*([^*\n]+)\*\*|__([^_\n]+)__/g, (_, bold, underscored) => `<strong>${bold || underscored}</strong>`);
+  html = html.replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  html = html.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>");
+  return html;
+}
+
+function renderMarkdown(value) {
+  const lines = String(value ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const blocks = [];
+  let paragraph = [];
+  let list = null;
+  let code = null;
+
+  const flushParagraph = () => {
+    if (paragraph.length) {
+      blocks.push(`<p>${paragraph.map(renderInlineMarkdown).join("<br>")}</p>`);
+      paragraph = [];
+    }
+  };
+  const flushList = () => {
+    if (list) {
+      blocks.push(`<${list.type}>${list.items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</${list.type}>`);
+      list = null;
+    }
+  };
+
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) {
+      flushParagraph();
+      flushList();
+      if (code === null) code = [];
+      else {
+        blocks.push(`<pre><code>${escapeHTML(code.join("\n"))}</code></pre>`);
+        code = null;
+      }
+      continue;
+    }
+    if (code !== null) {
+      code.push(line);
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    const item = line.match(/^\s*([-*+]|\d+\.)\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = heading[1].length;
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+    } else if (item) {
+      flushParagraph();
+      const type = /^\d+\./.test(item[1]) ? "ol" : "ul";
+      if (!list || list.type !== type) {
+        flushList();
+        list = { type, items: [] };
+      }
+      list.items.push(item[2]);
+    } else if (/^\s*>\s?/.test(line)) {
+      flushParagraph();
+      flushList();
+      blocks.push(`<blockquote>${renderInlineMarkdown(line.replace(/^\s*>\s?/, ""))}</blockquote>`);
+    } else if (line.trim() === "") {
+      flushParagraph();
+      flushList();
+    } else {
+      paragraph.push(line);
+    }
+  }
+  flushParagraph();
+  flushList();
+  if (code !== null) blocks.push(`<pre><code>${escapeHTML(code.join("\n"))}</code></pre>`);
+  return blocks.join("");
+}
+
 function relativeDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
@@ -51,7 +128,7 @@ async function select(id) {
     if (!response.ok) return;
     const detail = await response.json();
     document.querySelector("#conversation-body").innerHTML = (detail.messages || []).map(item =>
-      `<div class="bubble inbound"><div class="meta">${escapeHTML(item.from || message.sender)} // ${escapeHTML(item.date || "")}</div><p>${escapeHTML(item.body || "(No text content)")}</p></div>`).join("");
+      `<div class="bubble inbound"><div class="meta">${escapeHTML(item.from || message.sender)} // ${escapeHTML(item.date || "")}</div><div class="message-content">${renderMarkdown(item.body || "(No text content)")}</div></div>`).join("");
   } catch {
     // Keep the thread preview visible when detail loading is unavailable.
   }
@@ -132,7 +209,7 @@ document.querySelector("#reply-form").addEventListener("submit", event => {
   if (!reply.value.trim()) return;
   const bubble = document.createElement("div");
   bubble.className = "bubble outbound";
-  bubble.innerHTML = `<div class="meta">YOU // JUST NOW</div><p>${reply.value.replace(/[<>&]/g, c => ({'<':"&lt;",'>':"&gt;","&":"&amp;"}[c]))}</p>`;
+  bubble.innerHTML = `<div class="meta">YOU // JUST NOW</div><div class="message-content">${renderMarkdown(reply.value)}</div>`;
   document.querySelector("#conversation-body").append(bubble);
   reply.value = "";
 });

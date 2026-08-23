@@ -44,7 +44,7 @@ async function select(id) {
   selectedId = id;
   document.querySelector("#conversation-source").textContent = `${message.source.toUpperCase()} · ${message.time} AGO`;
   document.querySelector("#conversation-title").textContent = message.subject;
-  document.querySelector("#conversation-body").innerHTML = `<div class="bubble inbound"><div class="meta">${escapeHTML(message.sender)} // LOADING THREAD</div><p>${escapeHTML(message.preview)}</p></div>`;
+  document.querySelector("#conversation-body").innerHTML = `<div class="loading-state"><span class="radar"></span><strong>DECODING SIGNAL</strong><small>${escapeHTML(message.sender)} // ESTABLISHING SECURE LINK</small></div>`;
   document.querySelectorAll(".message").forEach(el => el.classList.toggle("selected", el.dataset.id === id));
   try {
     const response = await fetch(`/api/threads/${encodeURIComponent(id)}`);
@@ -86,6 +86,10 @@ async function loadLiveMessages() {
 
 async function loadPage(pageToken = "") {
   selectedId = null;
+  document.querySelector("#messages").innerHTML = `<div class="loading-state"><span class="radar"></span><strong>SCANNING RELAY DECK</strong><small>ACQUIRING MESSAGE SIGNALS...</small></div>`;
+  document.querySelector("#previous-page").disabled = true;
+  document.querySelector("#next-page").disabled = true;
+  document.querySelector("#page-status").textContent = "SCANNING";
   const response = await fetch(`/api/threads?${pageToken ? `pageToken=${encodeURIComponent(pageToken)}` : ""}`);
   if (!response.ok) return;
   const payload = await response.json();

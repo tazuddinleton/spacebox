@@ -8,11 +8,18 @@ let messages = [
 
 const list = document.querySelector("#messages");
 const search = document.querySelector("#search");
+const accountSelect = document.querySelector("#account-select");
 let activeFilter = "all";
+let selectedAccount = localStorage.getItem("spacebox-account") || "";
 let selectedId = null;
 let nextPageToken = "";
 let pageNumber = 1;
 const pageTokens = [""];
+
+function apiURL(path) {
+  if (!selectedAccount) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}account=${encodeURIComponent(selectedAccount)}`;
+}
 
 function escapeHTML(value) {
   return String(value ?? "").replace(/[<>&"]/g, char => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[char]));
@@ -124,7 +131,7 @@ async function select(id) {
   document.querySelector("#conversation-body").innerHTML = `<div class="loading-state"><span class="radar"></span><strong>DECODING SIGNAL</strong><small>${escapeHTML(message.sender)} // ESTABLISHING SECURE LINK</small></div>`;
   document.querySelectorAll(".message").forEach(el => el.classList.toggle("selected", el.dataset.id === id));
   try {
-    const response = await fetch(`/api/threads/${encodeURIComponent(id)}`);
+    const response = await fetch(apiURL(`/api/threads/${encodeURIComponent(id)}`));
     if (!response.ok) return;
     const detail = await response.json();
     document.querySelector("#conversation-body").innerHTML = (detail.messages || []).map(item =>
@@ -136,7 +143,7 @@ async function select(id) {
 
 async function loadLiveMessages() {
   try {
-    const response = await fetch("/api/threads");
+    const response = await fetch(apiURL("/api/threads"));
     if (!response.ok) return;
     const payload = await response.json();
     const liveThreads = Array.isArray(payload) ? payload : payload.threads;
@@ -167,7 +174,7 @@ async function loadPage(pageToken = "") {
   document.querySelector("#previous-page").disabled = true;
   document.querySelector("#next-page").disabled = true;
   document.querySelector("#page-status").textContent = "SCANNING";
-  const response = await fetch(`/api/threads?${pageToken ? `pageToken=${encodeURIComponent(pageToken)}` : ""}`);
+  const response = await fetch(apiURL(`/api/threads?${pageToken ? `pageToken=${encodeURIComponent(pageToken)}` : ""}`));
   if (!response.ok) return;
   const payload = await response.json();
   const liveThreads = payload.threads || [];
@@ -192,6 +199,13 @@ document.querySelectorAll(".nav-item[data-filter]").forEach(button => button.add
   render();
 }));
 search.addEventListener("input", render);
+accountSelect.addEventListener("change", () => {
+  selectedAccount = accountSelect.value;
+  localStorage.setItem("spacebox-account", selectedAccount);
+  pageNumber = 1;
+  pageTokens.length = 1;
+  loadPage().catch(() => loadLiveMessages());
+});
 document.querySelector("#next-page").addEventListener("click", () => {
   if (!nextPageToken) return;
   pageTokens[pageNumber] = nextPageToken;
@@ -214,4 +228,29 @@ document.querySelector("#reply-form").addEventListener("submit", event => {
   reply.value = "";
 });
 render();
-loadPage().catch(() => loadLiveMessages());
+
+async function loadAccounts() {
+  const response = await fetch("/api/accounts");
+  if (!response.ok) throw new Error("Could not load Gmail accounts");
+  const accounts = await response.json();
+  accountSelect.innerHTML = "";
+  accounts.forEach(account => {
+    const option = document.createElement("option");
+    option.value = account.id;
+    option.textContent = account.email;
+    accountSelect.append(option);
+  });
+  if (!accounts.length) {
+    accountSelect.innerHTML = '<option value="">No Gmail accounts</option>';
+    return;
+  }
+  if (!accounts.some(account => account.id === selectedAccount)) selectedAccount = accounts[0].id;
+  accountSelect.value = selectedAccount;
+  localStorage.setItem("spacebox-account", selectedAccount);
+}
+
+loadAccounts().catch(() => {
+  accountSelect.innerHTML = '<option value="">Account service unavailable</option>';
+}).finally(() => {
+  loadPage().catch(() => loadLiveMessages());
+});

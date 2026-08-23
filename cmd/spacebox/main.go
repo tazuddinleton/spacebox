@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -30,11 +31,12 @@ import (
 const gmailScopes = "https://www.googleapis.com/auth/gmail.modify"
 
 type server struct {
-	db         *sql.DB
-	oauth      *oauth2.Config
-	tokenPath  string
-	stateMu    sync.Mutex
-	oauthState map[string]time.Time
+	db          *sql.DB
+	oauth       *oauth2.Config
+	tokenPath   string
+	accountsDir string
+	stateMu     sync.Mutex
+	oauthState  map[string]time.Time
 }
 
 type thread struct {
@@ -67,6 +69,8 @@ type conversation struct {
 	Messages []messageDetail `json:"messages"`
 }
 
+const threadCacheTTL = 5 * time.Minute
+
 func main() {
 	port := env("SPACEBOX_PORT", "8787")
 	dbPath := env("SPACEBOX_DB", filepath.Join(dataDir(), "spacebox.db"))
@@ -83,11 +87,22 @@ func main() {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
 		log.Fatal(err)
 	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS gmail_accounts (email TEXT PRIMARY KEY, token_path TEXT NOT NULL)`); err != nil {
+		log.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS gmail_thread_cache (
+		account_email TEXT PRIMARY KEY,
+		payload TEXT NOT NULL,
+		cached_at TEXT NOT NULL
+	)`); err != nil {
+		log.Fatal(err)
+	}
 
 	s := &server{
-		db:         db,
-		tokenPath:  tokenPath,
-		oauthState: make(map[string]time.Time),
+		db:          db,
+		tokenPath:   tokenPath,
+		accountsDir: filepath.Join(filepath.Dir(tokenPath), "gmail-accounts"),
+		oauthState:  make(map[string]time.Time),
 	}
 	if config, err := gmailConfig(); err == nil {
 		s.oauth = config
@@ -99,6 +114,7 @@ func main() {
 	r.Get("/healthz", s.health)
 	r.Get("/auth/gmail", s.gmailAuth)
 	r.Get("/auth/gmail/callback", s.gmailCallback)
+	r.Get("/api/accounts", s.accounts)
 	r.Get("/api/threads", s.listThreads)
 	r.Get("/api/threads/{id}", s.getThread)
 	r.Post("/api/threads/{id}/reply", s.reply)
@@ -126,7 +142,7 @@ func (s *server) gmailAuth(w http.ResponseWriter, r *http.Request) {
 	s.stateMu.Lock()
 	s.oauthState[state] = time.Now().Add(10 * time.Minute)
 	s.stateMu.Unlock()
-	http.Redirect(w, r, s.oauth.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent")), http.StatusFound)
+	http.Redirect(w, r, s.oauth.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "select_account")), http.StatusFound)
 }
 
 func (s *server) gmailCallback(w http.ResponseWriter, r *http.Request) {
@@ -149,21 +165,106 @@ func (s *server) gmailCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not exchange Gmail authorization code", http.StatusBadGateway)
 		return
 	}
-	if err := saveToken(s.tokenPath, token); err != nil {
+	client := s.oauth.Client(r.Context(), token)
+	service, err := gmail.NewService(r.Context(), option.WithHTTPClient(client))
+	if err != nil {
+		http.Error(w, "could not connect to Gmail", http.StatusBadGateway)
+		return
+	}
+	profile, err := service.Users.GetProfile("me").Do()
+	if err != nil || profile.EmailAddress == "" {
+		http.Error(w, "could not identify Gmail account", http.StatusBadGateway)
+		return
+	}
+	accountID := profile.EmailAddress
+	if err := os.MkdirAll(s.accountsDir, 0o700); err != nil {
+		http.Error(w, "could not prepare account storage", http.StatusInternalServerError)
+		return
+	}
+	if err := saveToken(s.accountTokenPath(accountID), token); err != nil {
 		http.Error(w, "could not save Gmail token", http.StatusInternalServerError)
+		return
+	}
+	if _, err := s.db.Exec(`INSERT INTO gmail_accounts(email, token_path) VALUES(?,?) ON CONFLICT(email) DO UPDATE SET token_path=excluded.token_path`, accountID, s.accountTokenPath(accountID)); err != nil {
+		http.Error(w, "could not save Gmail account", http.StatusInternalServerError)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
+	s.migrateLegacyAccount(r.Context())
+	rows, err := s.db.Query(`SELECT email FROM gmail_accounts ORDER BY email`)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer rows.Close()
+	out := []map[string]string{}
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			writeError(w, err)
+			return
+		}
+		out = append(out, map[string]string{"id": email, "email": email})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) migrateLegacyAccount(ctx context.Context) {
+	if s.oauth == nil {
+		return
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM gmail_accounts`).Scan(&count); err != nil || count > 0 {
+		return
+	}
+	token, err := loadToken(s.tokenPath)
+	if err != nil {
+		return
+	}
+	service, err := gmail.NewService(ctx, option.WithHTTPClient(s.oauth.Client(ctx, token)))
+	if err != nil {
+		return
+	}
+	profile, err := service.Users.GetProfile("me").Do()
+	if err != nil || profile.EmailAddress == "" {
+		return
+	}
+	if err := os.MkdirAll(s.accountsDir, 0o700); err != nil {
+		return
+	}
+	accountPath := s.accountTokenPath(profile.EmailAddress)
+	if err := saveToken(accountPath, token); err != nil {
+		return
+	}
+	_, _ = s.db.Exec(`INSERT INTO gmail_accounts(email, token_path) VALUES(?,?) ON CONFLICT(email) DO NOTHING`, profile.EmailAddress, accountPath)
+}
+
 func (s *server) listThreads(w http.ResponseWriter, r *http.Request) {
-	service, err := s.gmail(r.Context())
+	accountID := s.resolveAccount(r.URL.Query().Get("account"))
+	w.Header().Set("X-Spacebox-Account", accountID)
+	pageToken := r.URL.Query().Get("pageToken")
+	if pageToken == "" && r.URL.Query().Get("refresh") != "1" {
+		if cached, ok := s.cachedThreads(r.Context(), accountID); ok {
+			w.Header().Set("X-Spacebox-Cache", "HIT")
+			writeJSON(w, http.StatusOK, cached)
+			return
+		}
+	}
+	w.Header().Set("X-Spacebox-Cache", "MISS")
+	service, err := s.gmail(r.Context(), accountID)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	call := service.Users.Threads.List("me").MaxResults(20)
-	if pageToken := r.URL.Query().Get("pageToken"); pageToken != "" {
+	if pageToken != "" {
 		call = call.PageToken(pageToken)
 	}
 	result, err := call.Do()
@@ -185,14 +286,65 @@ func (s *server) listThreads(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, threadPage{
+	page := threadPage{
 		Threads: out, NextPageToken: result.NextPageToken,
 		Total: label.ThreadsTotal, Unread: label.ThreadsUnread,
-	})
+	}
+	if pageToken == "" {
+		s.cacheThreads(r.Context(), accountID, page)
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *server) resolveAccount(accountID string) string {
+	if accountID != "" {
+		return accountID
+	}
+	var first string
+	if err := s.db.QueryRow(`SELECT email FROM gmail_accounts ORDER BY email LIMIT 1`).Scan(&first); err == nil {
+		return first
+	}
+	return ""
+}
+
+func (s *server) cachedThreads(ctx context.Context, accountID string) (threadPage, bool) {
+	if accountID == "" {
+		return threadPage{}, false
+	}
+	var payload, cachedAt string
+	if err := s.db.QueryRowContext(ctx, `SELECT payload, cached_at FROM gmail_thread_cache WHERE account_email = ?`, accountID).Scan(&payload, &cachedAt); err != nil {
+		return threadPage{}, false
+	}
+	timestamp, err := time.Parse(time.RFC3339, cachedAt)
+	if err != nil || time.Since(timestamp) > threadCacheTTL {
+		return threadPage{}, false
+	}
+	var page threadPage
+	if err := json.Unmarshal([]byte(payload), &page); err != nil {
+		return threadPage{}, false
+	}
+	return page, true
+}
+
+func (s *server) cacheThreads(ctx context.Context, accountID string, page threadPage) {
+	if accountID == "" {
+		return
+	}
+	payload, err := json.Marshal(page)
+	if err != nil {
+		log.Printf("could not encode Gmail thread cache for %s: %v", accountID, err)
+		return
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO gmail_thread_cache(account_email, payload, cached_at)
+		VALUES(?,?,?) ON CONFLICT(account_email) DO UPDATE SET payload=excluded.payload, cached_at=excluded.cached_at`,
+		accountID, payload, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		log.Printf("could not save Gmail thread cache for %s: %v", accountID, err)
+	}
 }
 
 func (s *server) getThread(w http.ResponseWriter, r *http.Request) {
-	service, err := s.gmail(r.Context())
+	service, err := s.gmail(r.Context(), r.URL.Query().Get("account"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -206,7 +358,7 @@ func (s *server) getThread(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) reply(w http.ResponseWriter, r *http.Request) {
-	service, err := s.gmail(r.Context())
+	service, err := s.gmail(r.Context(), r.URL.Query().Get("account"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -235,7 +387,7 @@ func (s *server) reply(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) sync(w http.ResponseWriter, r *http.Request) {
-	service, err := s.gmail(r.Context())
+	service, err := s.gmail(r.Context(), r.URL.Query().Get("account"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -252,16 +404,29 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"threads": len(result.Threads)})
 }
 
-func (s *server) gmail(ctx context.Context) (*gmail.Service, error) {
+func (s *server) gmail(ctx context.Context, accountID string) (*gmail.Service, error) {
 	if s.oauth == nil {
 		return nil, errors.New("Gmail OAuth is not configured; set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, and GMAIL_REDIRECT_URL")
 	}
-	token, err := loadToken(s.tokenPath)
+	tokenPath := s.tokenPath
+	if accountID != "" {
+		tokenPath = s.accountTokenPath(accountID)
+	} else {
+		if first := s.resolveAccount(""); first != "" {
+			tokenPath = s.accountTokenPath(first)
+		}
+	}
+	token, err := loadToken(tokenPath)
 	if err != nil {
 		return nil, errors.New("Gmail is not connected; open /auth/gmail first")
 	}
 	client := s.oauth.Client(ctx, token)
 	return gmail.NewService(ctx, option.WithHTTPClient(client))
+}
+
+func (s *server) accountTokenPath(email string) string {
+	hash := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	return filepath.Join(s.accountsDir, fmt.Sprintf("%x.json", hash[:8]))
 }
 
 func threadFromGmail(ctx context.Context, service *gmail.Service, id string) (thread, error) {

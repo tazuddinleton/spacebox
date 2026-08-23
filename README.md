@@ -36,7 +36,14 @@ GET  /api/threads
 GET  /api/threads/:id
 POST /api/threads/:id/reply
 POST /api/sync
+GET  /api/accounts
 ```
 
-Tokens are stored with `0600` permissions under
-`~/.local/share/spacebox/gmail-token.json` by default.
+Use **＋ Gmail** in the HUD to authorize another Google account. The account
+selector scopes inbox, detail, and sync requests to the selected account.
+Account tokens are stored with `0600` permissions under
+`~/.local/share/spacebox/gmail-accounts/`; an existing
+`gmail-token.json` is migrated automatically when accounts are first loaded.
+The first inbox page is cached per account in SQLite for five minutes. Add
+`refresh=1` to `GET /api/threads` to force a Gmail refresh and update that
+account's cache.

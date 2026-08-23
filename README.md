@@ -47,3 +47,16 @@ Account tokens are stored with `0600` permissions under
 The first inbox page is cached per account in SQLite for five minutes. Add
 `refresh=1` to `GET /api/threads` to force a Gmail refresh and update that
 account's cache.
+
+## Spacebox TUI
+
+The terminal client provides a cockpit-style inbox from the desktop. Build or
+launch it with:
+
+```bash
+~/.local/bin/spacebox-tui-launch
+```
+
+The Omarchy shortcut is **Super+Ctrl+B**. Inside the TUI, use `j`/`k` to
+navigate, `Enter` to open a conversation, `h` to return, `Tab` or `a` to
+switch Gmail accounts, `n`/`p` for pages, `r` to refresh, and `q` to quit.

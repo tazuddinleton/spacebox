@@ -71,7 +71,6 @@ document.querySelectorAll(".nav-item[data-filter]").forEach(button => button.add
   document.querySelectorAll(".nav-item").forEach(item => item.classList.remove("active"));
   button.classList.add("active");
   render();
-  loadLiveMessages();
 }));
 search.addEventListener("input", render);
 document.querySelector("#reply-form").addEventListener("submit", event => {
@@ -85,3 +84,4 @@ document.querySelector("#reply-form").addEventListener("submit", event => {
   reply.value = "";
 });
 render();
+loadLiveMessages();

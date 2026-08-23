@@ -20,6 +20,11 @@ Install the Google Cloud OAuth client credentials and set the values from
 the Google Cloud project. Then run:
 
 ```bash
+cp .env.example .env
+# Edit .env with your real credentials; never commit it.
+set -a
+source .env
+set +a
 go run ./cmd/spacebox
 ```
 

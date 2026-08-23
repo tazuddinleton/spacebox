@@ -82,25 +82,26 @@ async function loadLiveMessages() {
     // Keep the prototype messages visible when the API is unavailable.
   }
 
-  async function loadPage(pageToken = "") {
-    selectedId = null;
-    const response = await fetch(`/api/threads?${pageToken ? `pageToken=${encodeURIComponent(pageToken)}` : ""}`);
-    if (!response.ok) return;
-    const payload = await response.json();
-    const liveThreads = payload.threads || [];
-    messages = liveThreads.map(thread => ({
-      id: thread.id, source: "gmail", icon: "✉", sender: thread.from || "Gmail relay",
-      subject: thread.subject || "(No subject)", preview: thread.snippet || "No preview available",
-      time: relativeDate(thread.date), body: [thread.snippet || "Open this thread to view the full message."]
-    }));
-    nextPageToken = payload.nextPageToken || "";
-    document.querySelector('[data-count="all"]').textContent = payload.total ?? "—";
-    document.querySelector('[data-count="gmail"]').textContent = payload.unread ?? "—";
-    document.querySelector("#page-status").textContent = `RELAY ${String(pageNumber).padStart(2, "0")}`;
-    document.querySelector("#previous-page").disabled = pageNumber === 1;
-    document.querySelector("#next-page").disabled = !nextPageToken;
-    render();
-  }
+}
+
+async function loadPage(pageToken = "") {
+  selectedId = null;
+  const response = await fetch(`/api/threads?${pageToken ? `pageToken=${encodeURIComponent(pageToken)}` : ""}`);
+  if (!response.ok) return;
+  const payload = await response.json();
+  const liveThreads = payload.threads || [];
+  messages = liveThreads.map(thread => ({
+    id: thread.id, source: "gmail", icon: "✉", sender: thread.from || "Gmail relay",
+    subject: thread.subject || "(No subject)", preview: thread.snippet || "No preview available",
+    time: relativeDate(thread.date), body: [thread.snippet || "Open this thread to view the full message."]
+  }));
+  nextPageToken = payload.nextPageToken || "";
+  document.querySelector('[data-count="all"]').textContent = payload.total ?? "—";
+  document.querySelector('[data-count="gmail"]').textContent = payload.unread ?? "—";
+  document.querySelector("#page-status").textContent = `RELAY ${String(pageNumber).padStart(2, "0")}`;
+  document.querySelector("#previous-page").disabled = pageNumber === 1;
+  document.querySelector("#next-page").disabled = !nextPageToken;
+  render();
 }
 
 document.querySelectorAll(".nav-item[data-filter]").forEach(button => button.addEventListener("click", () => {

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -322,7 +323,7 @@ func messageBody(part *gmail.MessagePart) string {
 		return ""
 	}
 	if part.MimeType == "text/plain" && part.Body != nil && part.Body.Data != "" {
-		data, err := base64.RawURLEncoding.DecodeString(part.Body.Data)
+		data, err := decodeGmailData(part.Body.Data)
 		if err == nil {
 			return string(data)
 		}
@@ -332,7 +333,21 @@ func messageBody(part *gmail.MessagePart) string {
 			return body
 		}
 	}
+	if part.MimeType == "text/html" && part.Body != nil && part.Body.Data != "" {
+		data, err := decodeGmailData(part.Body.Data)
+		if err == nil {
+			return regexp.MustCompile(`<[^>]*>`).ReplaceAllString(html.UnescapeString(string(data)), " ")
+		}
+	}
 	return ""
+}
+
+func decodeGmailData(value string) ([]byte, error) {
+	data, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return base64.URLEncoding.DecodeString(value)
+	}
+	return data, nil
 }
 
 func (s *server) validState(state string) bool {
